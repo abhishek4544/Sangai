@@ -195,6 +195,27 @@ export function DragHandleIcon({ className = "size-3.5", ...rest }: IconProps) {
   );
 }
 
+export function PaletteIcon({ className = "size-4", ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`${base} ${className}`}
+      aria-hidden={rest["aria-hidden"] ?? true}
+    >
+      <path d="M12 3a9 9 0 1 0 0 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.4-.3-.4-.5-.9-.5-1.4 0-1.1.9-2 2-2h1.7a4.3 4.3 0 0 0 4.3-4.3C21 6.4 17 3 12 3Z" />
+      <circle cx="7.5" cy="10.5" r="1" fill="currentColor" />
+      <circle cx="10.5" cy="7" r="1" fill="currentColor" />
+      <circle cx="15" cy="7" r="1" fill="currentColor" />
+      <circle cx="17.5" cy="10.5" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function LeaveIcon({ className = "size-4", ...rest }: IconProps) {
   return (
     <svg

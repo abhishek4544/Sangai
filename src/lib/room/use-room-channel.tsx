@@ -193,6 +193,7 @@ export function RoomChannelProvider({ room, children }: ProviderProps) {
           now - joinedAt >= SNAPSHOT_ANSWER_MIN_MS &&
           from.length > 0
         ) {
+          const snapBgId = roomStateRef.current.backgroundId;
           const snapshotEvent: RoomEvent = {
             v: ENVELOPE_VERSION,
             ts: now,
@@ -204,6 +205,9 @@ export function RoomChannelProvider({ room, children }: ProviderProps) {
             whisperOn: roomStateRef.current.whisperOn,
             cardsEnabled: roomStateRef.current.cardsEnabled,
             currentCard: roomStateRef.current.currentCard,
+            backgroundId: snapBgId
+              ? { id: snapBgId, at: roomStateRef.current.updatedAt.backgroundId }
+              : null,
           };
           void room.localParticipant.publishData(encodeEvent(snapshotEvent), {
             reliable: true,

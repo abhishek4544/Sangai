@@ -128,6 +128,19 @@ const LookAtMeSchema = z.object({
   name: z.string().min(1).max(64),
 });
 
+/** TICKET-3 (Week 1) — cinema background pick. RELIABLE room-wide LWW field.
+ *  `id` is a stable string from `src/lib/backgrounds.ts` (BACKGROUNDS[].id).
+ *  Unknown ids on the receiving side fall back to the default in
+ *  `getBackground()` — no schema-level enum so adding scenes doesn't need an
+ *  envelope-version bump. */
+const BackgroundSchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("background"),
+  phase: z.literal("pick"),
+  id: z.string().min(1).max(64),
+});
+
 const ShareRequestSchema = z.object({
   v: z.literal(ENVELOPE_VERSION),
   ts: z.number().int().nonnegative(),
@@ -170,6 +183,15 @@ const HelloSchema = z.discriminatedUnion("phase", [
         at: z.number().int().nonnegative(),
       })
       .nullable(),
+    // TICKET-3: nullable so older peers who don't send this field decode
+    // cleanly; joiner keeps the default (`grass`) when snapshot omits it.
+    backgroundId: z
+      .object({
+        id: z.string().min(1).max(64),
+        at: z.number().int().nonnegative(),
+      })
+      .nullable()
+      .optional(),
   }),
 ]);
 
@@ -183,6 +205,7 @@ export const RoomEventSchema = z.union([
   ShareRequestSchema,
   LookAtMeSchema,
   ChatSchema,
+  BackgroundSchema,
 ]);
 
 export type RoomEvent = z.infer<typeof RoomEventSchema>;
@@ -194,6 +217,7 @@ export type HelloEvent = z.infer<typeof HelloSchema>;
 export type ShareRequestEvent = z.infer<typeof ShareRequestSchema>;
 export type LookAtMeEvent = z.infer<typeof LookAtMeSchema>;
 export type ChatEvent = z.infer<typeof ChatSchema>;
+export type BackgroundEvent = z.infer<typeof BackgroundSchema>;
 
 // ---- Encode / decode ------------------------------------------------------
 

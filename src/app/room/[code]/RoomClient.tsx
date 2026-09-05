@@ -59,6 +59,19 @@ import {
   type SmartMicHandle,
 } from "./SmartMic";
 import { ChatNotifications, ChatPanel } from "./Chat";
+import { BackgroundPicker } from "./BackgroundPicker";
+import {
+  WhisperProvider,
+  WhisperTogglePill,
+  useDuckedVolume,
+} from "./Whisper";
+import { MiniDateCardsButton, MiniDateCardsModal } from "./MiniDateCards";
+import {
+  DEFAULT_BACKGROUND_ID,
+  getBackground,
+  loadStoredBackground,
+  storeBackground,
+} from "@/lib/backgrounds";
 import { useRoomChannel } from "@/lib/room/use-room-channel";
 import {
   CopyIcon,
@@ -71,7 +84,6 @@ import {
   SparkleIcon,
   VideoIcon,
   VideoOffIcon,
-  WhisperGroupIcon,
 } from "./icons";
 
 interface Props {
@@ -453,33 +465,11 @@ export default function RoomClient({ code }: Props) {
       <RoomChannelProvider room={room}>
       <LookAtMeProvider>
       <SmartMicProvider room={room} handleRef={smartMicHandleRef}>
+      <WhisperProvider room={room}>
       <div
         className="relative flex h-screen flex-col overflow-hidden [color-scheme:light]"
-        style={{
-          background:
-            "linear-gradient(to bottom, #bce8ff 0%, #9adaff 55%, #7dccff 100%)",
-        }}
       >
-        {/* Soft cloud overlay */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: [
-              "radial-gradient(ellipse 55% 32% at 18% 22%, rgba(255,255,255,0.55), transparent 70%)",
-              "radial-gradient(ellipse 45% 26% at 68% 14%, rgba(255,255,255,0.5), transparent 70%)",
-              "radial-gradient(ellipse 38% 30% at 42% 45%, rgba(255,255,255,0.32), transparent 70%)",
-              "radial-gradient(ellipse 50% 28% at 88% 40%, rgba(255,255,255,0.42), transparent 70%)",
-            ].join(","),
-          }}
-        />
-        {/* Grass ground at the bottom — matches the Figma outdoor movie-
-            night vibe. `pointer-events-none` so it doesn't intercept the
-            action-bar buttons that overlap it. */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-[url('/grass.png')] bg-cover bg-bottom bg-no-repeat opacity-90"
-        />
+        <BackgroundLayer roomCode={code} />
 
         <RoomHeader
           code={code}
@@ -527,15 +517,15 @@ export default function RoomClient({ code }: Props) {
             />
           </div>
 
-          {/* Right sidebar only appears when someone is screen-sharing —
-              matches Figma node 16:1069. Both participant tiles stack on
-              top with the ChatPanel below them so faces stay visible next
-              to the shared tab and chat is one glance away. In the solo
-              and 2-person-no-share states, this column is hidden and the
-              stage takes the full width (Figma nodes 16:1674 / 16:1232);
-              in the solo state, floating `ChatNotifications` still
-              overlays the stage so messages surface without a panel. */}
-          {screenShare !== null && (
+          {/* Right sidebar states:
+              - Screen-share (Figma 16:1069): faces on top, chat below.
+              - Couple, no share: reserved for future fun games — an empty
+                surface so the stage-left / games-right split is stable and
+                a guest arriving doesn't reflow the whole page.
+              - Solo (Figma 21:2608): hidden entirely; the self-cam takes
+                the full width and floating ChatNotifications overlay the
+                stage. */}
+          {screenShare !== null ? (
             <aside className="flex w-[254px] shrink-0 flex-col gap-2">
               <ParticipantColumn
                 participants={participantSnapshot}
@@ -550,7 +540,18 @@ export default function RoomClient({ code }: Props) {
                 localIdentity={localIdentity ?? ""}
               />
             </aside>
-          )}
+          ) : participantSnapshot.length >= 2 ? (
+            <aside className="flex w-[254px] shrink-0 flex-col gap-2">
+              <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-white bg-white/60 p-4 text-center backdrop-blur">
+                <span className="font-[family-name:var(--font-outfit)] text-sm font-medium text-zinc-900">
+                  Fun games
+                </span>
+                <span className="font-[family-name:var(--font-outfit)] text-xs text-zinc-600">
+                  Coming soon — mini games to play together.
+                </span>
+              </div>
+            </aside>
+          ) : null}
         </div>
         {/* AC5.6 — single visually-hidden polite live region for reactions. */}
         {localIdentity !== undefined && (
@@ -563,6 +564,7 @@ export default function RoomClient({ code }: Props) {
           onYield={toggleScreenShare}
         />
       </div>
+      </WhisperProvider>
       </SmartMicProvider>
       </LookAtMeProvider>
       </RoomChannelProvider>
@@ -788,6 +790,48 @@ function findParticipantByIdentity(
 
 // ---------- Share stage ----------
 
+/**
+ * Room-wide background layer. Reads the current scene from `roomState`,
+ * falls back to localStorage (per-room key), then to the default. Writes
+ * back to localStorage whenever the effective bg changes so re-entering
+ * the same room restores the last pick.
+ */
+function BackgroundLayer({ roomCode }: { roomCode: string }) {
+  const { roomState } = useRoomChannel();
+  const stored = loadStoredBackground(roomCode);
+  const effectiveId =
+    roomState.backgroundId ?? stored ?? DEFAULT_BACKGROUND_ID;
+  const bg = getBackground(effectiveId);
+
+  useEffect(() => {
+    storeBackground(roomCode, effectiveId);
+  }, [roomCode, effectiveId]);
+
+  return (
+    <>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 transition-[background] duration-500"
+        style={{ background: bg.sky }}
+      />
+      {bg.cloudsOverlay && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0"
+          style={{ background: bg.cloudsOverlay }}
+        />
+      )}
+      {bg.foreground && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-40"
+          style={{ background: bg.foreground }}
+        />
+      )}
+    </>
+  );
+}
+
 function ShareStage({
   screenShare,
   startAt,
@@ -812,6 +856,8 @@ function ShareStage({
   const elapsed = useElapsedLabel(startAt);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const { roomState } = useRoomChannel();
+  const currentBgId = roomState.backgroundId ?? DEFAULT_BACKGROUND_ID;
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -846,17 +892,20 @@ function ShareStage({
         </span>
       </div>
 
-      {/* Fullscreen pill */}
-      <button
-        type="button"
-        onClick={toggleFullscreen}
-        className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-lg bg-black/40 px-3 py-2 text-zinc-100 backdrop-blur transition hover:bg-black/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
-      >
-        <FullscreenIcon className="size-4" />
-        <span className="font-[family-name:var(--font-outfit)] text-xs tracking-[0.5px]">
-          {isFullscreen ? "Exit Fullscreen" : "Full Screen"}
-        </span>
-      </button>
+      {/* Top-right pill cluster: scene picker + fullscreen */}
+      <div className="absolute right-3 top-3 z-20 flex items-start gap-2">
+        <BackgroundPicker currentId={currentBgId} />
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="flex items-center gap-2 rounded-lg bg-black/40 px-3 py-2 text-zinc-100 backdrop-blur transition hover:bg-black/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+        >
+          <FullscreenIcon className="size-4" />
+          <span className="font-[family-name:var(--font-outfit)] text-xs tracking-[0.5px]">
+            {isFullscreen ? "Exit Fullscreen" : "Full Screen"}
+          </span>
+        </button>
+      </div>
 
       {/* Content — screen share when someone's sharing, otherwise the
           big Figma video wall so the participants are the primary focus. */}
@@ -881,6 +930,9 @@ function ShareStage({
       {/* Ephemeral chat toasts — recent messages float over the stage so
           conversation is visible without shifting focus to the chat panel. */}
       <ChatNotifications localIdentity={localIdentity} />
+      {/* Mini Date Cards — floating prompt card, synced across both peers.
+          Mounted here so a fullscreen viewer still sees the prompt. */}
+      <MiniDateCardsModal />
     </div>
   );
 }
@@ -906,6 +958,8 @@ function pad(n: number): string {
 
 function ScreenShareView({ screenShare }: { screenShare: ScreenShareInfo }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  useDuckedVolume(videoEl, screenShare.isLocal ? 0 : 1);
   const { roomState } = useRoomChannel();
   // AC1.1: on a remote (guest-side) share, freeze the view while held so
   // the room actually feels stopped even if the sharer hasn't paused their
@@ -938,9 +992,14 @@ function ScreenShareView({ screenShare }: { screenShare: ScreenShareInfo }) {
     }
   }, [shouldFreeze]);
 
+  const setRefs = useCallback((el: HTMLVideoElement | null) => {
+    ref.current = el;
+    setVideoEl(el);
+  }, []);
+
   return (
     <video
-      ref={ref}
+      ref={setRefs}
       autoPlay
       playsInline
       // Mute the local preview so the browser can't route ScreenShareAudio
@@ -1017,28 +1076,59 @@ function VideoWall({
   onToggleMic: () => void;
   onToggleCam: () => void;
 }) {
-  // Figma 16:1674 — the "call, no share" states (solo waiting AND
-  // 2-person on call) both show a single big video filling the stage,
-  // not a grid. When it's just me, that big video is my own preview;
-  // once my girlfriend joins, the primary video swaps to her feed
-  // (FaceTime-style, no self-PIP per Figma). Backend caps at 2 so we
-  // never have to reason about 3+.
+  // FaceTime-style layout — the person you're talking to is the primary
+  // subject (fills the stage); your own camera is a small self-PIP in
+  // the bottom-right corner so you can sanity-check yourself without
+  // ceding half the stage to your own face. Solo state: just my own
+  // tile fills the stage. Matches image reference from 2026-09-05
+  // (user rejected the previous 2-tile side-by-side layout).
   const local = participants.find((p) => p.isLocal) ?? null;
   const remote = participants.find((p) => !p.isLocal) ?? null;
-  const primary = remote ?? local;
-  if (!primary) return null;
+
+  // 2-person: remote fills stage, self as PIP overlay bottom-right.
+  if (remote && local) {
+    return (
+      <div className="relative flex min-h-0 flex-1">
+        <ParticipantTile
+          participant={remote}
+          variant="stage"
+          isLocalHost={false}
+          micEnabled={micEnabled}
+          camEnabled={camEnabled}
+          onToggleMic={onToggleMic}
+          onToggleCam={onToggleCam}
+        />
+        <div className="pointer-events-auto absolute bottom-3 right-3 z-20 w-[200px]">
+          <ParticipantTile
+            participant={local}
+            variant="pip"
+            isLocalHost={local.identity === hostIdentity}
+            micEnabled={micEnabled}
+            camEnabled={camEnabled}
+            onToggleMic={onToggleMic}
+            onToggleCam={onToggleCam}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Solo: my own tile fills the stage (Figma node 21:2608). Not 4:3
+  // centered — the design shows the self-cam as the primary content
+  // filling the entire left column so it feels present rather than a
+  // small preview waiting for a guest.
+  const only = local ?? remote;
+  if (!only) return null;
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center">
-      <ParticipantTile
-        participant={primary}
-        variant="wall"
-        isLocalHost={primary.isLocal && primary.identity === hostIdentity}
-        micEnabled={micEnabled}
-        camEnabled={camEnabled}
-        onToggleMic={onToggleMic}
-        onToggleCam={onToggleCam}
-      />
-    </div>
+    <ParticipantTile
+      participant={only}
+      variant="stage"
+      isLocalHost={only.isLocal && only.identity === hostIdentity}
+      micEnabled={micEnabled}
+      camEnabled={camEnabled}
+      onToggleMic={onToggleMic}
+      onToggleCam={onToggleCam}
+    />
   );
 }
 
@@ -1358,20 +1448,9 @@ function ActionBar({
       <div className="flex items-center justify-between gap-3">
         {/* Left cluster — feature buttons (Phase 2 wires the behavior) */}
         <div className="flex flex-wrap items-center gap-1">
-          <FeaturePill
-            className="text-[#554100]"
-            title="Prompt cards at natural breaks. Coming in Phase 2."
-          >
-            Mini Date Cards
-          </FeaturePill>
+          <MiniDateCardsButton />
           <LookAtMePill nickname={nickname} />
-          <FeaturePill
-            className="text-red-600"
-            title="Duck movie audio while you talk. Coming in Phase 2."
-          >
-            <WhisperGroupIcon className="size-5 text-red-500" />
-            Whisper mode
-          </FeaturePill>
+          <WhisperTogglePill />
           <button
             type="button"
             onClick={onShareClick}
@@ -1400,30 +1479,6 @@ function ActionBar({
     </div>
   );
 }
-
-function FeaturePill({
-  children,
-  className = "",
-  title,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      className={
-        "flex h-[45px] items-center justify-center gap-2 rounded-lg border border-black/10 bg-white/60 px-6 font-[family-name:var(--font-outfit)] text-sm font-medium text-zinc-900 backdrop-blur transition hover:bg-white/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 " +
-        className
-      }
-    >
-      {children}
-    </button>
-  );
-}
-
 
 // ---------- End screen ----------
 

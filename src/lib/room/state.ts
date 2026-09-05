@@ -35,6 +35,9 @@ export interface RoomState {
   whisperOn: boolean;
   cardsEnabled: boolean;
   currentCard: CurrentCard | null;
+  /** TICKET-3: id from `src/lib/backgrounds.ts` (BACKGROUNDS[].id). Unknown
+   *  ids fall back to the default at render time in `getBackground()`. */
+  backgroundId: string | null;
   /**
    * Per-field last-writer timestamps. We can't derive these from the values
    * (`held: null` on init and `held: null` after release look the same), so
@@ -46,6 +49,7 @@ export interface RoomState {
     whisperOn: number;
     cardsEnabled: number;
     currentCard: number;
+    backgroundId: number;
   };
 }
 
@@ -59,11 +63,13 @@ export function initialRoomState(): RoomState {
     whisperOn: false,
     cardsEnabled: true,
     currentCard: null,
+    backgroundId: null,
     updatedAt: {
       held: 0,
       whisperOn: 0,
       cardsEnabled: 0,
       currentCard: 0,
+      backgroundId: 0,
     },
   };
 }
@@ -168,6 +174,16 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
       // Message history lives in the ChatPanel's local state (per-tab, no
       // persistence). Room-state reducer is a no-op.
       return state;
+
+    case "background": {
+      // Single phase (`pick`). LWW by ts.
+      if (event.ts <= state.updatedAt.backgroundId) return state;
+      return {
+        ...state,
+        backgroundId: event.id,
+        updatedAt: { ...state.updatedAt, backgroundId: event.ts },
+      };
+    }
   }
 }
 
@@ -208,6 +224,13 @@ export function adoptSnapshot(
   if (cardTs > state.updatedAt.currentCard) {
     next.currentCard = snap.currentCard ? { ...snap.currentCard } : null;
     next.updatedAt.currentCard = cardTs;
+  }
+  // TICKET-3: bg is optional in the snapshot for forward-compat with older
+  // peers who don't send the field. Same LWW rule as the other refs.
+  const bgTs = snap.backgroundId?.at ?? 0;
+  if (bgTs > state.updatedAt.backgroundId) {
+    next.backgroundId = snap.backgroundId?.id ?? null;
+    next.updatedAt.backgroundId = bgTs;
   }
   return next;
 }
