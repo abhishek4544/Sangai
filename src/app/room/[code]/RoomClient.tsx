@@ -65,7 +65,7 @@ import {
   WhisperTogglePill,
   useDuckedVolume,
 } from "./Whisper";
-import { MiniDateCardsButton, MiniDateCardsModal } from "./MiniDateCards";
+import { GamesPanel } from "./GamesPanel";
 import {
   DEFAULT_BACKGROUND_ID,
   getBackground,
@@ -541,15 +541,8 @@ export default function RoomClient({ code }: Props) {
               />
             </aside>
           ) : participantSnapshot.length >= 2 ? (
-            <aside className="flex w-[254px] shrink-0 flex-col gap-2">
-              <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-white bg-white/60 p-4 text-center backdrop-blur">
-                <span className="font-[family-name:var(--font-outfit)] text-sm font-medium text-zinc-900">
-                  Fun games
-                </span>
-                <span className="font-[family-name:var(--font-outfit)] text-xs text-zinc-600">
-                  Coming soon — mini games to play together.
-                </span>
-              </div>
+            <aside className="flex w-[416px] shrink-0 flex-col gap-2">
+              <GamesPanel room={room} />
             </aside>
           ) : null}
         </div>
@@ -930,9 +923,6 @@ function ShareStage({
       {/* Ephemeral chat toasts — recent messages float over the stage so
           conversation is visible without shifting focus to the chat panel. */}
       <ChatNotifications localIdentity={localIdentity} />
-      {/* Mini Date Cards — floating prompt card, synced across both peers.
-          Mounted here so a fullscreen viewer still sees the prompt. */}
-      <MiniDateCardsModal />
     </div>
   );
 }
@@ -1084,6 +1074,7 @@ function VideoWall({
   // (user rejected the previous 2-tile side-by-side layout).
   const local = participants.find((p) => p.isLocal) ?? null;
   const remote = participants.find((p) => !p.isLocal) ?? null;
+  const [mirrorOpen, setMirrorOpen] = useState(false);
 
   // 2-person: remote fills stage, self as PIP overlay bottom-right.
   if (remote && local) {
@@ -1098,7 +1089,7 @@ function VideoWall({
           onToggleMic={onToggleMic}
           onToggleCam={onToggleCam}
         />
-        <div className="pointer-events-auto absolute bottom-3 right-3 z-20 w-[200px]">
+        <div className="group pointer-events-auto absolute bottom-3 right-3 z-20 w-[240px]">
           <ParticipantTile
             participant={local}
             variant="pip"
@@ -1108,7 +1099,17 @@ function VideoWall({
             onToggleMic={onToggleMic}
             onToggleCam={onToggleCam}
           />
+          <button
+            type="button"
+            onClick={() => setMirrorOpen(true)}
+            aria-label="Open mirror to check how you look"
+            className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md bg-black/60 px-2 py-1 text-[10px] font-medium text-white opacity-0 backdrop-blur transition group-hover:opacity-100 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            <span aria-hidden>🪞</span>
+            Check me
+          </button>
         </div>
+        {mirrorOpen && <SelfMirrorModal onClose={() => setMirrorOpen(false)} />}
       </div>
     );
   }
@@ -1129,6 +1130,73 @@ function VideoWall({
       onToggleMic={onToggleMic}
       onToggleCam={onToggleCam}
     />
+  );
+}
+
+/**
+ * Full-screen mirror check — user asked for a "how do I look" preview.
+ * Attaches the local camera track to a large mirrored video so the user can
+ * inspect themselves without ceding stage real estate. Local-only: nothing
+ * broadcast. Esc + backdrop click both dismiss.
+ */
+function SelfMirrorModal({ onClose }: { onClose: () => void }) {
+  const room = useRoom();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!room) return;
+    const el = videoRef.current;
+    if (!el) return;
+    const pub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+    const track = pub?.track;
+    if (!track) return;
+    track.attach(el);
+    return () => {
+      track.detach(el);
+    };
+  }, [room]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Mirror — how do I look?"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative flex flex-col items-center gap-3 rounded-2xl bg-white p-4 shadow-2xl"
+      >
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          className="h-[70vh] w-auto rounded-xl bg-zinc-900 object-cover scale-x-[-1]"
+          aria-label="Your camera — mirrored"
+        />
+        <div className="flex w-full items-center justify-between">
+          <span className="font-[family-name:var(--font-outfit)] text-xs text-zinc-500">
+            Only you see this. Press Esc or click outside to close.
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 font-[family-name:var(--font-outfit)] text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1265,7 +1333,14 @@ function ParticipantTile({
             autoPlay
             playsInline
             muted={participant.isLocal}
-            className="h-full w-full object-cover"
+            // Mirror only the LOCAL self-view — that's how every video-chat
+            // app you've used works. Raising your right hand appears in the
+            // "right" of your own preview so it feels like a mirror. Remote
+            // tiles stay unmirrored (that's the peer's real orientation).
+            className={
+              "h-full w-full object-cover " +
+              (participant.isLocal ? "scale-x-[-1]" : "")
+            }
             aria-label={`${label} video`}
           />
         ) : (
@@ -1448,7 +1523,6 @@ function ActionBar({
       <div className="flex items-center justify-between gap-3">
         {/* Left cluster — feature buttons (Phase 2 wires the behavior) */}
         <div className="flex flex-wrap items-center gap-1">
-          <MiniDateCardsButton />
           <LookAtMePill nickname={nickname} />
           <WhisperTogglePill />
           <button

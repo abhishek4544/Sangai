@@ -37,9 +37,22 @@ const FLOATER_MS = 3000;
  *  the animation completes, not concurrently. */
 const CLEANUP_BUFFER_MS = 100;
 
-/** Random horizontal spawn position, in vw-relative units for the overlay. */
+/** Burst — one click = this many floaters. Product ask 2026-09-06. */
+const BURST_COUNT = 1000;
+
+/** Total time we spread the burst across so 1000 emojis don't all land in the
+ *  same frame. ~2s feels like reaction-rain, not a wall. */
+const BURST_STAGGER_MS = 2000;
+
+/** Max floaters we allow on screen concurrently. Beyond this we drop new
+ *  spawns to keep frame rate up on lower-end devices. 1000 spawned over 2s
+ *  with 3s lifetime → peak ~1000; the cap trims that to a safe ceiling. */
+const CONCURRENT_FLOATER_CAP = 500;
+
+/** Random horizontal spawn position (percent of overlay width). Widened to
+ *  near-full-width so 500 concurrent floaters really do spread. */
 function randomXPercent(): number {
-  return 10 + Math.random() * 80;
+  return 2 + Math.random() * 96;
 }
 
 /**
@@ -76,6 +89,7 @@ export function ReactionsBar({ nickname }: { nickname: string }) {
       emoji,
       id: makeReactionId(),
       name: nickname,
+      count: BURST_COUNT,
     });
   };
 
@@ -102,7 +116,25 @@ interface Floater {
   key: string;
   emoji: string;
   xPercent: number;
+  durationMs: number;
+  /** Font size in rem — random per floater for depth-of-field feel. */
+  sizeRem: number;
+  /** Horizontal drift in vw the emoji travels while rising (±). Non-zero so
+   *  paths diverge; two floaters spawned at the same X won't overlap. */
+  driftVw: number;
 }
+
+/** Size range (rem). Small ≈ far away / background; large ≈ up close. */
+const MIN_SIZE_REM = 1.25;
+const MAX_SIZE_REM = 4.5;
+
+/** Extra random per-floater delay ON TOP of the stagger gap, so the rain
+ *  clumps and thins irregularly instead of ticking metronomically. */
+const EXTRA_JITTER_MS = 500;
+
+/** Maximum horizontal drift (± this value in vw) applied over the floater's
+ *  lifetime. Adds sideways motion so vertical paths don't stack. */
+const MAX_DRIFT_VW = 12;
 
 export function ReactionsOverlay() {
   const { subscribe } = useRoomChannel();
@@ -112,19 +144,58 @@ export function ReactionsOverlay() {
   const seqRef = useRef(0);
 
   useEffect(() => {
+    const timers = new Set<number>();
+    const scheduleSpawn = (emoji: string, id: string, delay: number) => {
+      const t = window.setTimeout(() => {
+        timers.delete(t);
+        // Compute random visuals ONCE, out here — inside setFloaters the
+        // updater is impure and React 18 Strict Mode double-invokes it in
+        // dev, which lets random values resolve inconsistently.
+        const key = `${id}-${seqRef.current++}`;
+        const xPercent = randomXPercent();
+        const durationMs = FLOATER_MS + Math.random() * 800;
+        const sizeRem =
+          MIN_SIZE_REM + Math.random() * (MAX_SIZE_REM - MIN_SIZE_REM);
+        const driftVw = (Math.random() * 2 - 1) * MAX_DRIFT_VW;
+        setFloaters((prev) => {
+          // Concurrent cap — drop new spawns rather than choke the compositor.
+          if (prev.length >= CONCURRENT_FLOATER_CAP) return prev;
+          return [
+            ...prev,
+            { key, emoji, xPercent, durationMs, sizeRem, driftVw },
+          ];
+        });
+        const cleanup = window.setTimeout(() => {
+          setFloaters((prev) => prev.filter((f) => f.key !== key));
+        }, FLOATER_MS + 800 + CLEANUP_BUFFER_MS);
+        timers.add(cleanup);
+      }, delay);
+      timers.add(t);
+    };
+
     const handler = (event: ChannelEvent) => {
       if (event.type !== "reaction") return;
-      const key = `${event.id}-${seqRef.current++}`;
-      setFloaters((prev) => [
-        ...prev,
-        { key, emoji: event.emoji, xPercent: randomXPercent() },
-      ]);
-      // Remove after the CSS transition has visibly completed.
-      window.setTimeout(() => {
-        setFloaters((prev) => prev.filter((f) => f.key !== key));
-      }, FLOATER_MS + CLEANUP_BUFFER_MS);
+      const count = event.count ?? 1;
+      if (count === 1) {
+        scheduleSpawn(event.emoji, event.id, 0);
+        return;
+      }
+      // Stagger the burst across BURST_STAGGER_MS. Even spacing feels
+      // mechanical; per-emoji jitter (up to ±half-gap + an extra bounded
+      // random) makes the rain clump and thin naturally.
+      const gap = BURST_STAGGER_MS / count;
+      for (let i = 0; i < count; i++) {
+        const jitter = (Math.random() - 0.5) * gap;
+        const extra = Math.random() * EXTRA_JITTER_MS;
+        const delay = Math.max(0, i * gap + jitter + extra);
+        scheduleSpawn(event.emoji, event.id, delay);
+      }
     };
-    return subscribe(handler);
+    const unsubscribe = subscribe(handler);
+    return () => {
+      unsubscribe();
+      for (const t of timers) window.clearTimeout(t);
+    };
   }, [subscribe]);
 
   return (
@@ -139,21 +210,25 @@ export function ReactionsOverlay() {
       {floaters.map((f) => (
         <span
           key={f.key}
-          className="absolute select-none text-4xl reaction-floater"
-          style={{
-            left: `${f.xPercent}%`,
-            bottom: 0,
-            // CSS custom prop consumed by the keyframes below.
-            animationDuration: `${FLOATER_MS}ms`,
-          }}
+          className="absolute select-none leading-none reaction-floater"
+          style={
+            {
+              left: `${f.xPercent}%`,
+              bottom: 0,
+              fontSize: `${f.sizeRem}rem`,
+              animationDuration: `${f.durationMs}ms`,
+              // Per-floater horizontal drift consumed by the keyframe below.
+              ["--drift" as string]: `${f.driftVw}vw`,
+            } as React.CSSProperties
+          }
         >
           {f.emoji}
         </span>
       ))}
       <style>{`
         @keyframes reaction-float {
-          from { transform: translateY(0);       opacity: 1; }
-          to   { transform: translateY(-100vh);  opacity: 0; }
+          from { transform: translate(0, 0);                    opacity: 1; }
+          to   { transform: translate(var(--drift, 0), -100vh); opacity: 0; }
         }
         .reaction-floater {
           animation-name: reaction-float;

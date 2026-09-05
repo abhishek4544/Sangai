@@ -56,6 +56,12 @@ function reliabilityFor(event: RoomEvent): DataPacket_Kind {
   if (event.type === "whisper" && event.phase !== "toggle") {
     return DataPacket_Kind.LOSSY;
   }
+  // Draw segments are per-line-fragment; a dropped one leaves a tiny gap but
+  // shouldn't block the drawer's next stroke on retransmission. Clear and
+  // prompt fall through to RELIABLE — losing them is user-visible.
+  if (event.type === "draw" && event.phase === "segment") {
+    return DataPacket_Kind.LOSSY;
+  }
   return DataPacket_Kind.RELIABLE;
 }
 
@@ -194,6 +200,7 @@ export function RoomChannelProvider({ room, children }: ProviderProps) {
           from.length > 0
         ) {
           const snapBgId = roomStateRef.current.backgroundId;
+          const snapGameId = roomStateRef.current.activeGameId;
           const snapshotEvent: RoomEvent = {
             v: ENVELOPE_VERSION,
             ts: now,
@@ -207,6 +214,12 @@ export function RoomChannelProvider({ room, children }: ProviderProps) {
             currentCard: roomStateRef.current.currentCard,
             backgroundId: snapBgId
               ? { id: snapBgId, at: roomStateRef.current.updatedAt.backgroundId }
+              : null,
+            activeGame: snapGameId
+              ? {
+                  id: snapGameId,
+                  at: roomStateRef.current.updatedAt.activeGameId,
+                }
               : null,
           };
           void room.localParticipant.publishData(encodeEvent(snapshotEvent), {

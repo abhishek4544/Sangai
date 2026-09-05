@@ -38,6 +38,9 @@ export interface RoomState {
   /** TICKET-3: id from `src/lib/backgrounds.ts` (BACKGROUNDS[].id). Unknown
    *  ids fall back to the default at render time in `getBackground()`. */
   backgroundId: string | null;
+  /** Which couple-game is open in the right-column panel. `null` = the tile
+   *  grid is showing (back to selection). id refers to `GAMES[].id`. */
+  activeGameId: string | null;
   /**
    * Per-field last-writer timestamps. We can't derive these from the values
    * (`held: null` on init and `held: null` after release look the same), so
@@ -50,6 +53,7 @@ export interface RoomState {
     cardsEnabled: number;
     currentCard: number;
     backgroundId: number;
+    activeGameId: number;
   };
 }
 
@@ -64,12 +68,14 @@ export function initialRoomState(): RoomState {
     cardsEnabled: true,
     currentCard: null,
     backgroundId: null,
+    activeGameId: null,
     updatedAt: {
       held: 0,
       whisperOn: 0,
       cardsEnabled: 0,
       currentCard: 0,
       backgroundId: 0,
+      activeGameId: 0,
     },
   };
 }
@@ -184,6 +190,22 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
         updatedAt: { ...state.updatedAt, backgroundId: event.ts },
       };
     }
+
+    case "game": {
+      if (event.ts <= state.updatedAt.activeGameId) return state;
+      const nextId = event.phase === "open" ? event.id : null;
+      return {
+        ...state,
+        activeGameId: nextId,
+        updatedAt: { ...state.updatedAt, activeGameId: event.ts },
+      };
+    }
+
+    case "truthOrDare":
+    case "draw":
+      // Per-game events flow only through the subscribe path. Reducer is
+      // a no-op — game state lives inside the game component, not room state.
+      return state;
   }
 }
 
@@ -231,6 +253,11 @@ export function adoptSnapshot(
   if (bgTs > state.updatedAt.backgroundId) {
     next.backgroundId = snap.backgroundId?.id ?? null;
     next.updatedAt.backgroundId = bgTs;
+  }
+  const gameTs = snap.activeGame?.at ?? 0;
+  if (gameTs > state.updatedAt.activeGameId) {
+    next.activeGameId = snap.activeGame?.id ?? null;
+    next.updatedAt.activeGameId = gameTs;
   }
   return next;
 }

@@ -30,6 +30,13 @@ const ReactionSchema = z.object({
   emoji: z.string().min(1).max(8),
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(64),
+  /**
+   * "Burst" size. Optional so old peers (no `count` field) still decode; they
+   * simply render one floater as before. Bounded so a malicious/broken sender
+   * can't turn one click into an OOM on the receiver. Overlay staggers the
+   * spawn so 1000 emojis feel like reaction-rain, not a frame drop.
+   */
+  count: z.number().int().min(1).max(1000).optional(),
 });
 
 /** AC1.x — hold state is single-writer-wins by `ts`. Payload carries the
@@ -128,6 +135,88 @@ const LookAtMeSchema = z.object({
   name: z.string().min(1).max(64),
 });
 
+/** Draw Together — real-time shared canvas. Segments are sent as one packet
+ *  per drawn line-segment (from → to), coordinates normalized 0-1 so peers
+ *  render at their own canvas size. LOSSY per-segment (a dropped segment
+ *  leaves a tiny gap — better than blocking the drawer's next stroke on
+ *  retransmission). RELIABLE for clear + prompt (must not be lost). */
+const DrawSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("draw"),
+    phase: z.literal("segment"),
+    strokeId: z.string().min(1).max(64),
+    from: z.object({ x: z.number(), y: z.number() }),
+    to: z.object({ x: z.number(), y: z.number() }),
+    color: z.string().min(1).max(24),
+    size: z.number().int().min(1).max(64),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("draw"),
+    phase: z.literal("clear"),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("draw"),
+    phase: z.literal("prompt"),
+    id: z.string().min(1).max(64),
+  }),
+]);
+
+/** Truth or Dare — per-game events, not stored in room state. Both peers
+ *  derive local game state from the ordered event stream (subscribe path in
+ *  use-room-channel). Reliability: RELIABLE — a lost `pick` would leave a
+ *  peer looking at the wrong card. `turn` is included so late-arriving
+ *  duplicates can be filtered on the receiver (turn goes only forward). */
+const TruthOrDareSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("truthOrDare"),
+    phase: z.literal("pick"),
+    turn: z.number().int().nonnegative(),
+    cardType: z.enum(["truth", "dare"]),
+    cardId: z.string().min(1).max(64),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("truthOrDare"),
+    phase: z.literal("pass"),
+    turn: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("truthOrDare"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Couple Games — which game is currently open in the right-column panel.
+ *  Room-wide LWW by `ts`. `open` sets the visible game id; `close` clears
+ *  back to the tile grid. RELIABLE — a lost event would strand the panel
+ *  on the wrong screen for one peer. */
+const GameSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("game"),
+    phase: z.literal("open"),
+    id: z.string().min(1).max(64),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("game"),
+    phase: z.literal("close"),
+  }),
+]);
+
 /** TICKET-3 (Week 1) — cinema background pick. RELIABLE room-wide LWW field.
  *  `id` is a stable string from `src/lib/backgrounds.ts` (BACKGROUNDS[].id).
  *  Unknown ids on the receiving side fall back to the default in
@@ -192,6 +281,15 @@ const HelloSchema = z.discriminatedUnion("phase", [
       })
       .nullable()
       .optional(),
+    // Couple Games — nullable so older peers who don't send this field
+    // decode cleanly; joiner sees the tile grid until an open lands.
+    activeGame: z
+      .object({
+        id: z.string().min(1).max(64),
+        at: z.number().int().nonnegative(),
+      })
+      .nullable()
+      .optional(),
   }),
 ]);
 
@@ -206,6 +304,9 @@ export const RoomEventSchema = z.union([
   LookAtMeSchema,
   ChatSchema,
   BackgroundSchema,
+  GameSchema,
+  TruthOrDareSchema,
+  DrawSchema,
 ]);
 
 export type RoomEvent = z.infer<typeof RoomEventSchema>;
@@ -218,6 +319,9 @@ export type ShareRequestEvent = z.infer<typeof ShareRequestSchema>;
 export type LookAtMeEvent = z.infer<typeof LookAtMeSchema>;
 export type ChatEvent = z.infer<typeof ChatSchema>;
 export type BackgroundEvent = z.infer<typeof BackgroundSchema>;
+export type GameEvent = z.infer<typeof GameSchema>;
+export type TruthOrDareEvent = z.infer<typeof TruthOrDareSchema>;
+export type DrawEvent = z.infer<typeof DrawSchema>;
 
 // ---- Encode / decode ------------------------------------------------------
 
