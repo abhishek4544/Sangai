@@ -135,6 +135,91 @@ const LookAtMeSchema = z.object({
   name: z.string().min(1).max(64),
 });
 
+/** Movie Picker — "tonight's pick" wizard. Two partners each pick their top
+ *  N by TMDB search, then one shuffles → landed movie wins. All events flow
+ *  through the subscribe path (no room-state field). RELIABLE — every event
+ *  (open, step change, pick, shuffle result) is user-visible and must not
+ *  be lost. Serialized movie carries the minimum needed to render a poster
+ *  card without a round-trip to TMDB. */
+const PickerMovieSchema = z.object({
+  id: z.number().int(),
+  title: z.string().min(1).max(200),
+  posterPath: z.string().nullable(),
+  releaseDate: z.string().nullable().optional(),
+});
+const MoviePickerSchema = z.discriminatedUnion("phase", [
+  // NB: open/close intentionally NOT here — the picker is opened/closed via
+  // the shared `game.open`/`game.close` path with id "movie-picker" so it
+  // slots into the couple-games right-column panel exactly like a game.
+  // Genre step was removed 2026-09-06 — felt like friction; picker jumps
+  // straight to search + pick 3 each.
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("moviePicker"),
+    phase: z.literal("step"),
+    step: z.number().int().min(0).max(2),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("moviePicker"),
+    phase: z.literal("add"),
+    by: z.string().min(1).max(128),
+    movie: PickerMovieSchema,
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("moviePicker"),
+    phase: z.literal("remove"),
+    by: z.string().min(1).max(128),
+    movieId: z.number().int(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("moviePicker"),
+    phase: z.literal("shuffle-result"),
+    movieId: z.number().int(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("moviePicker"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Movie Trivia — 10 questions per round, both peers answer independently.
+ *  All events flow through the subscribe path (no room-state field). Both
+ *  peers stay in sync via ordered `answer` / `next` / `reset` events over
+ *  the RELIABLE channel. */
+const MovieTriviaSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("movieTrivia"),
+    phase: z.literal("answer"),
+    questionIdx: z.number().int().nonnegative(),
+    optionIdx: z.number().int().min(0).max(3),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("movieTrivia"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("movieTrivia"),
+    phase: z.literal("reset"),
+  }),
+]);
+
 /** Draw Together — real-time shared canvas. Segments are sent as one packet
  *  per drawn line-segment (from → to), coordinates normalized 0-1 so peers
  *  render at their own canvas size. LOSSY per-segment (a dropped segment
@@ -208,6 +293,11 @@ const GameSchema = z.discriminatedUnion("phase", [
     type: z.literal("game"),
     phase: z.literal("open"),
     id: z.string().min(1).max(64),
+    /** Identity of the peer who opened it. Some games (Movie Picker) gate
+     *  certain steps to the opener; downstream components read
+     *  `roomState.activeGameBy` for that. Optional so pre-existing peers
+     *  who don't send it still decode cleanly. */
+    by: z.string().min(1).max(128).optional(),
   }),
   z.object({
     v: z.literal(ENVELOPE_VERSION),
@@ -307,6 +397,8 @@ export const RoomEventSchema = z.union([
   GameSchema,
   TruthOrDareSchema,
   DrawSchema,
+  MoviePickerSchema,
+  MovieTriviaSchema,
 ]);
 
 export type RoomEvent = z.infer<typeof RoomEventSchema>;
@@ -322,6 +414,8 @@ export type BackgroundEvent = z.infer<typeof BackgroundSchema>;
 export type GameEvent = z.infer<typeof GameSchema>;
 export type TruthOrDareEvent = z.infer<typeof TruthOrDareSchema>;
 export type DrawEvent = z.infer<typeof DrawSchema>;
+export type MoviePickerEvent = z.infer<typeof MoviePickerSchema>;
+export type MovieTriviaEvent = z.infer<typeof MovieTriviaSchema>;
 
 // ---- Encode / decode ------------------------------------------------------
 

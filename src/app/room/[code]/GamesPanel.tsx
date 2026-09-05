@@ -21,6 +21,7 @@ import { useRoomChannel } from "@/lib/room/use-room-channel";
 import { GAMES, getGameById } from "@/lib/games";
 import { TruthOrDarePanel } from "./games/TruthOrDare";
 import { DrawTogetherPanel } from "./games/DrawTogether";
+import { MoviePicker, MOVIE_PICKER_GAME_ID } from "./features/MoviePicker";
 
 export function GamesPanel({ room }: { room: Room | null }) {
   const { roomState, sendEvent } = useRoomChannel();
@@ -37,6 +38,18 @@ export function GamesPanel({ room }: { room: Room | null }) {
   const closeGame = useCallback(() => {
     void sendEvent({ type: "game", phase: "close" });
   }, [sendEvent]);
+
+  // Movie picker is opened via the same game.open sync path but isn't in
+  // the tiles catalog — it has its own action-bar button. Render it here
+  // so the couples games panel is the single home for anything that
+  // "takes over" this right-column space.
+  if (activeGameId === MOVIE_PICKER_GAME_ID && room) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-2 rounded-lg border border-white bg-white/80 p-3 backdrop-blur">
+        <MoviePicker room={room} onClose={closeGame} />
+      </div>
+    );
+  }
 
   if (activeGame) {
     return (

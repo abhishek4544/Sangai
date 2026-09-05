@@ -66,6 +66,7 @@ import {
   useDuckedVolume,
 } from "./Whisper";
 import { GamesPanel } from "./GamesPanel";
+import { MoviePickerButton } from "./features/MoviePicker";
 import {
   DEFAULT_BACKGROUND_ID,
   getBackground,
@@ -514,6 +515,7 @@ export default function RoomClient({ code }: Props) {
               onToggleScreenShare={toggleScreenShare}
               nickname={session?.nickname ?? "Guest"}
               localIdentity={localIdentity ?? ""}
+              room={room}
             />
           </div>
 
@@ -1483,20 +1485,17 @@ function ActionBar({
   onToggleScreenShare,
   nickname,
   localIdentity,
+  room,
 }: {
   screenSharing: boolean;
-  /** Identity of the current sharer when it's someone other than us.
-   *  `null` when nobody is sharing or when we are the sharer. Used to
-   *  target the `shareRequest` event so only the actual sharer sees the
-   *  "wants to share" toast. */
   currentSharerIdentity: string | null;
   screenShareError: string | null;
   onToggleScreenShare: () => void;
-  /** Sender identity carried in reaction payloads (AC5.6 SR announce). */
   nickname: string;
-  /** Local participant identity — used by WaitForMePill to distinguish
-   *  initiator vs. non-initiator state. */
   localIdentity: string;
+  /** Passed through to MoviePickerButton so it can attach camera tracks and
+   *  read the local/remote identities for the picker. */
+  room: Room | null;
 }) {
   const someoneElseSharing = currentSharerIdentity !== null;
   const { pending: requestPending, request: requestShare } = useShareRequest(
@@ -1525,6 +1524,7 @@ function ActionBar({
         <div className="flex flex-wrap items-center gap-1">
           <LookAtMePill nickname={nickname} />
           <WhisperTogglePill />
+          <MoviePickerButton room={room} />
           <button
             type="button"
             onClick={onShareClick}

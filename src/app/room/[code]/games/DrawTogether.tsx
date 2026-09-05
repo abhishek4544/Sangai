@@ -63,6 +63,10 @@ export function DrawTogetherPanel() {
   const [promptId, setPromptId] = useState<string>(DRAW_PROMPTS[0]!.id);
 
   // Draw a single segment onto the canvas. Coordinates are normalized 0-1.
+  // Multiplies by CSS dimensions (from `getBoundingClientRect`), NOT
+  // `canvas.width` — the context is scaled by DPR below, so the drawing
+  // coordinate space is CSS pixels. Using canvas.width here landed lines
+  // at 2× the cursor position on retina displays.
   const drawSegment = useCallback(
     (
       from: { x: number; y: number },
@@ -74,13 +78,14 @@ export function DrawTogetherPanel() {
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+      const rect = canvas.getBoundingClientRect();
       ctx.strokeStyle = lineColor;
       ctx.lineWidth = lineSize;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.beginPath();
-      ctx.moveTo(from.x * canvas.width, from.y * canvas.height);
-      ctx.lineTo(to.x * canvas.width, to.y * canvas.height);
+      ctx.moveTo(from.x * rect.width, from.y * rect.height);
+      ctx.lineTo(to.x * rect.width, to.y * rect.height);
       ctx.stroke();
     },
     [],
@@ -94,17 +99,56 @@ export function DrawTogetherPanel() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
 
-  // Wire canvas to its actual pixel size (retina-friendly).
+  // Keep the canvas backing store in sync with the container's CSS size.
+  // Mounting inside a `flex-1` panel can measure 0x0 on the first tick,
+  // which threw the coordinate math off; a ResizeObserver catches both
+  // that first-layout case and any panel/window resize afterward. We
+  // snapshot the existing pixels and repaint into the new buffer so a
+  // window resize doesn't wipe the drawing.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    const ctx = canvas.getContext("2d");
-    // scale so lineWidth is expressed in CSS px, not device px
-    ctx?.scale(dpr, dpr);
+
+    const applySize = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const nextW = Math.max(1, Math.round(rect.width * dpr));
+      const nextH = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width === nextW && canvas.height === nextH) return;
+
+      // Preserve current pixels across the resize.
+      const prev =
+        canvas.width > 0 && canvas.height > 0
+          ? (() => {
+              try {
+                return document.createElement("canvas");
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+      if (prev) {
+        prev.width = canvas.width;
+        prev.height = canvas.height;
+        prev.getContext("2d")?.drawImage(canvas, 0, 0);
+      }
+
+      canvas.width = nextW;
+      canvas.height = nextH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      // Draw in CSS px (retina-crisp lineWidth without callers doing math).
+      ctx.scale(dpr, dpr);
+      if (prev) {
+        // Rescale the old bitmap into the new CSS-pixel coordinate space.
+        ctx.drawImage(prev, 0, 0, rect.width, rect.height);
+      }
+    };
+
+    applySize();
+    const ro = new ResizeObserver(applySize);
+    ro.observe(canvas);
+    return () => ro.disconnect();
   }, []);
 
   // Subscribe to inbound draw events.

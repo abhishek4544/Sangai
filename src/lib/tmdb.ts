@@ -107,8 +107,58 @@ export async function discoverMovies(
   return parsed.data;
 }
 
-export function posterUrl(path: string | null, size: "w500" = "w500"): string | null {
+export function posterUrl(
+  path: string | null,
+  size: "w185" | "w342" | "w500" = "w500",
+): string | null {
   if (!path) return null;
   return `https://image.tmdb.org/t/p/${size}${path}`;
+}
+
+// ---- Search ---------------------------------------------------------------
+
+const SearchParamsSchema = z.object({
+  query: z.string().min(1).max(120),
+  page: z.coerce.number().int().min(1).max(500).default(1),
+});
+export type SearchParams = z.infer<typeof SearchParamsSchema>;
+export { SearchParamsSchema };
+
+const SearchResponseSchema = z.object({
+  page: z.number(),
+  total_pages: z.number(),
+  total_results: z.number(),
+  results: z.array(MovieSchema),
+});
+export type SearchResponse = z.infer<typeof SearchResponseSchema>;
+
+/** Free-text movie search. Used by the Movie Picker to let each partner
+ *  pick their top N by title. Same 8s timeout / 401 / shape-mismatch
+ *  guards as `discoverMovies` — one code path, one failure surface. */
+export async function searchMovies(params: SearchParams): Promise<SearchResponse> {
+  const url = new URL("/3/search/movie", "https://api.themoviedb.org");
+  url.searchParams.set("api_key", env.TMDB_API_KEY);
+  url.searchParams.set("query", params.query);
+  url.searchParams.set("page", String(params.page));
+  url.searchParams.set("include_adult", "false");
+
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8_000),
+  });
+
+  if (res.status === 401) {
+    throw new TmdbError("TMDB rejected the API key", 502, 401);
+  }
+  if (!res.ok) {
+    throw new TmdbError(`TMDB search failed (${res.status})`, 502, res.status);
+  }
+
+  const json = await res.json();
+  const parsed = SearchResponseSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new TmdbError("TMDB returned an unexpected search shape", 502);
+  }
+  return parsed.data;
 }
 

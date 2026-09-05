@@ -41,6 +41,10 @@ export interface RoomState {
   /** Which couple-game is open in the right-column panel. `null` = the tile
    *  grid is showing (back to selection). id refers to `GAMES[].id`. */
   activeGameId: string | null;
+  /** Identity of the peer who opened the active game. Some games (Movie
+   *  Picker) restrict certain steps to the opener. `null` when no game
+   *  active or when opened by a pre-`by`-field peer. */
+  activeGameBy: string | null;
   /**
    * Per-field last-writer timestamps. We can't derive these from the values
    * (`held: null` on init and `held: null` after release look the same), so
@@ -69,6 +73,7 @@ export function initialRoomState(): RoomState {
     currentCard: null,
     backgroundId: null,
     activeGameId: null,
+    activeGameBy: null,
     updatedAt: {
       held: 0,
       whisperOn: 0,
@@ -194,15 +199,19 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
     case "game": {
       if (event.ts <= state.updatedAt.activeGameId) return state;
       const nextId = event.phase === "open" ? event.id : null;
+      const nextBy = event.phase === "open" ? event.by ?? null : null;
       return {
         ...state,
         activeGameId: nextId,
+        activeGameBy: nextBy,
         updatedAt: { ...state.updatedAt, activeGameId: event.ts },
       };
     }
 
     case "truthOrDare":
     case "draw":
+    case "moviePicker":
+    case "movieTrivia":
       // Per-game events flow only through the subscribe path. Reducer is
       // a no-op — game state lives inside the game component, not room state.
       return state;
@@ -257,6 +266,10 @@ export function adoptSnapshot(
   const gameTs = snap.activeGame?.at ?? 0;
   if (gameTs > state.updatedAt.activeGameId) {
     next.activeGameId = snap.activeGame?.id ?? null;
+    // Snapshot doesn't carry `by` today — leave activeGameBy as-is; the
+    // owner-gate falls open (nobody), which is safe: worst case picker's
+    // genre step becomes editable by both for a joiner. Follow-up ticket
+    // can extend `hello.snapshot` if this becomes visible.
     next.updatedAt.activeGameId = gameTs;
   }
   return next;
