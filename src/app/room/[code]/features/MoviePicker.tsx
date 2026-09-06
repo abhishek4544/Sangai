@@ -32,7 +32,11 @@ import type { RoomEvent as ChannelEvent } from "@/lib/room/envelope";
 
 // ---- Constants -----------------------------------------------------------
 
-const PICKS_PER_PERSON = 3;
+/** Default picks per person. Couples can bump this up or down via the
+ *  header control; the choice syncs to the partner via `picks-per-person`. */
+const DEFAULT_PICKS_PER_PERSON = 3;
+const MIN_PICKS_PER_PERSON = 1;
+const MAX_PICKS_PER_PERSON = 10;
 
 interface PickerMovie {
   id: number;
@@ -108,6 +112,7 @@ export function MoviePicker({ room, onClose }: Props) {
   const [myPicks, setMyPicks] = useState<PickerMovie[]>([]);
   const [partnerPicks, setPartnerPicks] = useState<PickerMovie[]>([]);
   const [shuffleWinnerId, setShuffleWinnerId] = useState<number | null>(null);
+  const [picksPerPerson, setPicksPerPerson] = useState(DEFAULT_PICKS_PER_PERSON);
 
   // ---- Inbound event handling -------------------------------------------
 
@@ -147,6 +152,18 @@ export function MoviePicker({ room, onClose }: Props) {
           setPartnerPicks([]);
           setShuffleWinnerId(null);
           return;
+        case "picks-per-person": {
+          // Trim any picks over the new cap so both peers converge to the
+          // same list length. Bumping the cap up leaves existing picks alone.
+          const n = Math.min(
+            MAX_PICKS_PER_PERSON,
+            Math.max(MIN_PICKS_PER_PERSON, event.count),
+          );
+          setPicksPerPerson(n);
+          setMyPicks((prev) => prev.slice(0, n));
+          setPartnerPicks((prev) => prev.slice(0, n));
+          return;
+        }
         default:
           return;
       }
@@ -162,7 +179,7 @@ export function MoviePicker({ room, onClose }: Props) {
     void sendEvent({ type: "moviePicker", phase: "step", step: next });
   };
   const addPick = (m: PickerMovie) => {
-    if (myPicks.length >= PICKS_PER_PERSON) return;
+    if (myPicks.length >= picksPerPerson) return;
     if (myPicks.some((x) => x.id === m.id)) return;
     setMyPicks((prev) => [...prev, m]);
     void sendEvent({
@@ -188,6 +205,21 @@ export function MoviePicker({ room, onClose }: Props) {
     setPartnerPicks([]);
     setShuffleWinnerId(null);
   };
+  const changePicksPerPerson = (n: number) => {
+    const clamped = Math.min(
+      MAX_PICKS_PER_PERSON,
+      Math.max(MIN_PICKS_PER_PERSON, n),
+    );
+    if (clamped === picksPerPerson) return;
+    setPicksPerPerson(clamped);
+    setMyPicks((prev) => prev.slice(0, clamped));
+    setPartnerPicks((prev) => prev.slice(0, clamped));
+    void sendEvent({
+      type: "moviePicker",
+      phase: "picks-per-person",
+      count: clamped,
+    });
+  };
 
   // Reveal step gets both lists combined into one shuffle pool.
   const pool = useMemo(
@@ -195,7 +227,7 @@ export function MoviePicker({ room, onClose }: Props) {
     [myPicks, partnerPicks],
   );
 
-  const bothReady = myPicks.length === PICKS_PER_PERSON && partnerPicks.length === PICKS_PER_PERSON;
+  const bothReady = myPicks.length === picksPerPerson && partnerPicks.length === picksPerPerson;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -260,12 +292,15 @@ export function MoviePicker({ room, onClose }: Props) {
             onRemove={removeMyPick}
             onNext={() => goToStep(1)}
             bothReady={bothReady}
+            picksPerPerson={picksPerPerson}
+            onChangePicksPerPerson={changePicksPerPerson}
           />
         )}
         {step === 1 && (
           <RevealStep
             pool={pool}
             winnerId={shuffleWinnerId}
+            picksPerPerson={picksPerPerson}
             onShuffle={() => {
               if (pool.length === 0) return;
               const winner = pool[Math.floor(Math.random() * pool.length)]!;
@@ -293,6 +328,8 @@ function PickStep({
   onRemove,
   onNext,
   bothReady,
+  picksPerPerson,
+  onChangePicksPerPerson,
 }: {
   myPicks: PickerMovie[];
   partnerPicks: PickerMovie[];
@@ -302,6 +339,8 @@ function PickStep({
   onRemove: (id: number) => void;
   onNext: () => void;
   bothReady: boolean;
+  picksPerPerson: number;
+  onChangePicksPerPerson: (n: number) => void;
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PickerMovie[]>([]);
@@ -353,19 +392,19 @@ function PickStep({
 
   return (
     <StepFrame
-      title={`Your top ${PICKS_PER_PERSON} movies`}
-      subtitle={`Search and tap to add. Both of you need ${PICKS_PER_PERSON}.`}
+      title={`Your top ${picksPerPerson} movie${picksPerPerson === 1 ? "" : "s"}`}
+      subtitle={`Search and tap to add. Both of you need ${picksPerPerson}.`}
       footer={
         <div className="flex items-center gap-2">
           <ProgressPill
             label={meName}
             done={myPicks.length}
-            total={PICKS_PER_PERSON}
+            total={picksPerPerson}
           />
           <ProgressPill
             label={partnerName}
             done={partnerPicks.length}
-            total={PICKS_PER_PERSON}
+            total={picksPerPerson}
           />
           <button
             type="button"
@@ -379,8 +418,19 @@ function PickStep({
       }
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3">
+        {/* Picks-per-person selector — synced across peers so both see the
+            same number of slots and progress denominators. */}
+        <PicksPerPersonPicker
+          value={picksPerPerson}
+          onChange={onChangePicksPerPerson}
+        />
+
         {/* My picks strip */}
-        <MyPicksStrip picks={myPicks} onRemove={onRemove} />
+        <MyPicksStrip
+          picks={myPicks}
+          onRemove={onRemove}
+          picksPerPerson={picksPerPerson}
+        />
 
         {/* Search input */}
         <input
@@ -412,7 +462,7 @@ function PickStep({
           {results.map((m) => {
             const already = myPicks.some((x) => x.id === m.id);
             const partnerHas = partnerPicks.some((x) => x.id === m.id);
-            const disabled = already || myPicks.length >= PICKS_PER_PERSON;
+            const disabled = already || myPicks.length >= picksPerPerson;
             return (
               <button
                 key={m.id}
@@ -470,11 +520,13 @@ function PickStep({
 function MyPicksStrip({
   picks,
   onRemove,
+  picksPerPerson,
 }: {
   picks: PickerMovie[];
   onRemove: (id: number) => void;
+  picksPerPerson: number;
 }) {
-  const slots = Array.from({ length: PICKS_PER_PERSON });
+  const slots = Array.from({ length: picksPerPerson });
   return (
     <div className="flex gap-2">
       {slots.map((_, i) => {
@@ -520,6 +572,48 @@ function MyPicksStrip({
   );
 }
 
+function PicksPerPersonPicker({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-2 py-1.5">
+      <span className="font-[family-name:var(--font-outfit)] text-[11px] font-medium text-indigo-900">
+        Movies each
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onChange(value - 1)}
+          disabled={value <= MIN_PICKS_PER_PERSON}
+          aria-label="Fewer picks"
+          className="flex size-6 items-center justify-center rounded-md border border-indigo-200 bg-white text-sm font-semibold text-indigo-800 transition hover:bg-indigo-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          −
+        </button>
+        <span className="min-w-[1.5rem] text-center font-mono text-sm font-bold text-indigo-900">
+          {value}
+        </span>
+        <button
+          type="button"
+          onClick={() => onChange(value + 1)}
+          disabled={value >= MAX_PICKS_PER_PERSON}
+          aria-label="More picks"
+          className="flex size-6 items-center justify-center rounded-md border border-indigo-200 bg-white text-sm font-semibold text-indigo-800 transition hover:bg-indigo-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          +
+        </button>
+      </div>
+      <span className="ml-auto text-[10px] text-indigo-700">
+        {MIN_PICKS_PER_PERSON}–{MAX_PICKS_PER_PERSON} · syncs to partner
+      </span>
+    </div>
+  );
+}
+
 function ProgressPill({
   label,
   done,
@@ -550,10 +644,12 @@ function ProgressPill({
 function RevealStep({
   pool,
   winnerId,
+  picksPerPerson,
   onShuffle,
 }: {
   pool: PickerMovie[];
   winnerId: number | null;
+  picksPerPerson: number;
   onShuffle: () => void;
 }) {
   const [cyclingIdx, setCyclingIdx] = useState<number | null>(null);
@@ -596,9 +692,10 @@ function RevealStep({
 
   const shuffled = winnerId !== null;
 
+  const poolTotal = picksPerPerson * 2;
   return (
     <StepFrame
-      title="Six movies. One winner."
+      title={`${poolTotal} movie${poolTotal === 1 ? "" : "s"}. One winner.`}
       subtitle="Whoever hits shuffle first triggers it for both."
       footer={
         <button
@@ -611,8 +708,14 @@ function RevealStep({
       }
     >
       <div className="flex min-h-0 flex-1 flex-col gap-3">
-        {/* Pool thumbnails */}
-        <div className="grid grid-cols-6 gap-1.5">
+        {/* Pool thumbnails — column count follows the pool size so 2, 4,
+            6, 8… all lay out cleanly at any picks-per-person setting. */}
+        <div
+          className="grid gap-1.5"
+          style={{
+            gridTemplateColumns: `repeat(${Math.max(2, Math.min(poolTotal, 10))}, minmax(0, 1fr))`,
+          }}
+        >
           {pool.map((m, i) => (
             <div
               key={m.id}

@@ -189,6 +189,16 @@ const MoviePickerSchema = z.discriminatedUnion("phase", [
     type: z.literal("moviePicker"),
     phase: z.literal("reset"),
   }),
+  // Product ask 2026-09-06: default is 3 each but couples want control —
+  // some people can barely name one, others want a bigger shuffle pool.
+  // Bounds are practical (1–10); the picker UI stays snappy up to 10 each.
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("moviePicker"),
+    phase: z.literal("picks-per-person"),
+    count: z.number().int().min(1).max(10),
+  }),
 ]);
 
 /** Movie Trivia — 10 questions per round, both peers answer independently.
