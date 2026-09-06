@@ -75,7 +75,7 @@ export const GAMES: GameDef[] = [
     title: "Emoji Charades",
     glyph: "🎭",
     tagline: "Describe a movie in emojis.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "draw-together",

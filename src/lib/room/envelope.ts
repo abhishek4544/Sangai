@@ -220,6 +220,56 @@ const MovieTriviaSchema = z.discriminatedUnion("phase", [
   }),
 ]);
 
+/** Emoji Charades — turn-based movie-guessing game. Deck is fixed-order on
+ *  both peers, so the wire only carries `movieIdx` (int). Guesser self-
+ *  validates against the shared deck (couples game, trust assumed) and
+ *  broadcasts a `reveal` with `correct: true` the moment they match; the
+ *  clue-giver can also broadcast `reveal` with `correct: false` to skip.
+ *  RELIABLE — a lost clue/reveal/next event strands a peer on a stale round. */
+const EmojiCharadesSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("emojiCharades"),
+    phase: z.literal("clue"),
+    turn: z.number().int().nonnegative(),
+    movieIdx: z.number().int().nonnegative(),
+    // Emoji strings pack more bytes per char than ASCII; 120 chars is plenty
+    // for a clue while capping the payload well under 1 KB.
+    emojis: z.string().min(1).max(120),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("emojiCharades"),
+    phase: z.literal("guess"),
+    turn: z.number().int().nonnegative(),
+    text: z.string().min(1).max(200),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("emojiCharades"),
+    phase: z.literal("reveal"),
+    turn: z.number().int().nonnegative(),
+    correct: z.boolean(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("emojiCharades"),
+    phase: z.literal("next"),
+    nextTurn: z.number().int().nonnegative(),
+    nextMovieIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("emojiCharades"),
+    phase: z.literal("reset"),
+  }),
+]);
+
 /** Draw Together — real-time shared canvas. Segments are sent as one packet
  *  per drawn line-segment (from → to), coordinates normalized 0-1 so peers
  *  render at their own canvas size. LOSSY per-segment (a dropped segment
@@ -399,6 +449,7 @@ export const RoomEventSchema = z.union([
   DrawSchema,
   MoviePickerSchema,
   MovieTriviaSchema,
+  EmojiCharadesSchema,
 ]);
 
 export type RoomEvent = z.infer<typeof RoomEventSchema>;
@@ -416,6 +467,7 @@ export type TruthOrDareEvent = z.infer<typeof TruthOrDareSchema>;
 export type DrawEvent = z.infer<typeof DrawSchema>;
 export type MoviePickerEvent = z.infer<typeof MoviePickerSchema>;
 export type MovieTriviaEvent = z.infer<typeof MovieTriviaSchema>;
+export type EmojiCharadesEvent = z.infer<typeof EmojiCharadesSchema>;
 
 // ---- Encode / decode ------------------------------------------------------
 

@@ -212,6 +212,7 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
     case "draw":
     case "moviePicker":
     case "movieTrivia":
+    case "emojiCharades":
       // Per-game events flow only through the subscribe path. Reducer is
       // a no-op — game state lives inside the game component, not room state.
       return state;

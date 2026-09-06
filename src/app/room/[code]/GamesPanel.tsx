@@ -22,6 +22,7 @@ import { GAMES, getGameById } from "@/lib/games";
 import { TruthOrDarePanel } from "./games/TruthOrDare";
 import { DrawTogetherPanel } from "./games/DrawTogether";
 import { MovieTriviaPanel } from "./games/MovieTrivia";
+import { EmojiCharadesPanel } from "./games/EmojiCharades";
 import { MoviePicker, MOVIE_PICKER_GAME_ID } from "./features/MoviePicker";
 
 export function GamesPanel({ room }: { room: Room | null }) {
@@ -78,6 +79,8 @@ export function GamesPanel({ room }: { room: Room | null }) {
             <DrawTogetherPanel />
           ) : activeGame.id === "trivia" && room ? (
             <MovieTriviaPanel room={room} />
+          ) : activeGame.id === "emoji-guess" && room ? (
+            <EmojiCharadesPanel room={room} />
           ) : (
             <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border border-dashed border-zinc-300 bg-white/60 p-4 text-center">
               <p className="font-[family-name:var(--font-outfit)] text-sm text-zinc-600">
