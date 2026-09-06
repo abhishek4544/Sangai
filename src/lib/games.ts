@@ -68,7 +68,7 @@ export const GAMES: GameDef[] = [
     title: "Movie Trivia",
     glyph: "🎬",
     tagline: "Test each other on your favorites.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "emoji-guess",

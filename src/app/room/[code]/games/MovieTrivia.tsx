@@ -1,4 +1,4 @@
-"use client">
+"use client";
 
 /**
  * Movie Trivia — 10-question round, both partners answer independently,
