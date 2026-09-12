@@ -26,7 +26,7 @@ export const GAMES: GameDef[] = [
     title: "Would You Rather",
     glyph: "🤔",
     tagline: "Pick A or B — reveal together.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "truth-or-dare",
@@ -40,28 +40,28 @@ export const GAMES: GameDef[] = [
     title: "Never Have I Ever",
     glyph: "🚫",
     tagline: "Tap if you've done it. Reveal what surprises.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "most-likely-to",
     title: "Most Likely To",
     glyph: "👑",
     tagline: "Point at whoever fits. See if you agree.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "how-well",
     title: "How Well Do You Know Me?",
     glyph: "💭",
     tagline: "Answer for yourself and for each other.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "two-truths",
     title: "Two Truths & a Lie",
     glyph: "🕵️",
     tagline: "Guess the lie in your partner's three.",
-    status: "coming-soon",
+    status: "available",
   },
   {
     id: "trivia",
@@ -82,6 +82,26 @@ export const GAMES: GameDef[] = [
     title: "Draw Together",
     glyph: "🎨",
     tagline: "Doodle on a shared canvas.",
+    status: "available",
+  },
+  // Cooperative co-authoring game — the only "build together" game in the
+  // grid, so worth a distinct icon and tagline. Same weekly-shuffle pattern
+  // as the other pick games.
+  {
+    id: "story-time",
+    title: "Story Time",
+    glyph: "📖",
+    tagline: "Write a silly love story together, one blank at a time.",
+    status: "available",
+  },
+  // Meditative counterweight to the arcade games — timed cooperative
+  // rituals for two. Distinct enough (calm palette, no scoring) that it
+  // reads as a different mode when it opens.
+  {
+    id: "slow-down",
+    title: "Slow Down",
+    glyph: "🕯️",
+    tagline: "Timed rituals for two — presence over points.",
     status: "available",
   },
 ];

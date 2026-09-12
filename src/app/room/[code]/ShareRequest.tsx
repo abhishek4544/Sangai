@@ -134,7 +134,7 @@ export function ShareRequestToast({ isSharing, onYield }: ShareRequestToastProps
             onYield();
             dismiss();
           }}
-          className="rounded-md border border-sky-300 bg-sky-500 px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-sky-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          className="rounded-md border border-sky-700 bg-sky-700 px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:bg-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
         >
           Yield
         </button>

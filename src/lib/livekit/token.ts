@@ -56,6 +56,7 @@ export async function mintAccessToken({
     canPublish: true,
     canSubscribe: true,
     // ADR 0005 §1: data channel is the Phase-2 signaling substrate (reactions, hold, whisper, cards).
+    // ADR 0006 §"No new backend surface": Watch Mode watch/* events ride the same grant — no token change needed.
     canPublishData: true,
     // ADR 0005 §8: covers setName + setAttributes (participant attributes ride the own-metadata grant).
     canUpdateOwnMetadata: true,

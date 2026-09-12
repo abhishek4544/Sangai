@@ -213,8 +213,26 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
     case "moviePicker":
     case "movieTrivia":
     case "emojiCharades":
+    case "wouldYouRather":
+    case "neverHaveIEver":
+    case "mostLikelyTo":
+    case "howWell":
+    case "storyTime":
+    case "twoTruths":
+    case "slowDown":
       // Per-game events flow only through the subscribe path. Reducer is
       // a no-op — game state lives inside the game component, not room state.
+      return state;
+
+    case "watch/load":
+    case "watch/play":
+    case "watch/pause":
+    case "watch/seek":
+    case "watch/heartbeat":
+    case "watch/stop":
+      // Watch Mode state is managed entirely by useWatchSync (peer-to-peer,
+      // not stored in room-wide state). Reducer is a no-op — Watch Mode does
+      // not need a room-state slot; useWatchSync owns its own reducer.
       return state;
   }
 }

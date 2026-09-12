@@ -1,5 +1,18 @@
 "use client";
 
+import dynamic from "next/dynamic";
+
+// AC (frontend F7): keep the YouTube IFrame SDK out of the initial /room/[code] bundle.
+// WatchPanel and its provider tree are only fetched when a user opens Watch Mode.
+const WatchPanel = dynamic(
+  () => import("./WatchPanel").then((m) => ({ default: m.WatchPanel })),
+  { ssr: false, loading: () => null },
+);
+const WatchModeButton = dynamic(
+  () => import("./WatchPanel").then((m) => ({ default: m.WatchModeButton })),
+  { ssr: false, loading: () => null },
+);
+
 /**
  * The LiveKit-backed room UI.
  *
@@ -165,6 +178,13 @@ export default function RoomClient({ code }: Props) {
   const [copiedToast, setCopiedToast] = useState(false);
   // Captured when we first hit "connected"; drives the "Together for X" timer.
   const [sessionStartAt, setSessionStartAt] = useState<number | null>(null);
+
+  // Watch Mode panel visibility. The panel itself holds all Watch Mode state via
+  // useWatchSync; toggling here just shows/hides the panel surface.
+  const [watchPanelOpen, setWatchPanelOpen] = useState(false);
+  // Track whether Watch Mode is actively playing (set by WatchPanel callback).
+  // Used to disable the screen-share button while Watch Mode is running.
+  const [watchModeActive, setWatchModeActive] = useState(false);
 
   // ---------------- Redirect when no session --------------------------------
   // Direct-URL paste with no stashed token — bounce back to the join form
@@ -516,10 +536,14 @@ export default function RoomClient({ code }: Props) {
               nickname={session?.nickname ?? "Guest"}
               localIdentity={localIdentity ?? ""}
               room={room}
+              watchModeActive={watchModeActive}
+              watchPanelOpen={watchPanelOpen}
+              onToggleWatchPanel={() => setWatchPanelOpen((v) => !v)}
             />
           </div>
 
           {/* Right sidebar states:
+              - Watch Mode panel open: takes the right column.
               - Screen-share (Figma 16:1069): faces on top, chat below.
               - Couple, no share: reserved for future fun games — an empty
                 surface so the stage-left / games-right split is stable and
@@ -527,7 +551,18 @@ export default function RoomClient({ code }: Props) {
               - Solo (Figma 21:2608): hidden entirely; the self-cam takes
                 the full width and floating ChatNotifications overlay the
                 stage. */}
-          {screenShare !== null ? (
+          {watchPanelOpen ? (
+            <aside className="flex min-h-0 w-[460px] shrink-0 flex-col gap-2">
+              {/* AC7: Watch Mode and screen-share are mutually exclusive.
+                  The WatchPanel disables its URL input when screenShareActive.
+                  The Share button in ActionBar is disabled when watchModeActive. */}
+              <WatchPanel
+                room={room}
+                screenShareActive={screenShare !== null}
+                onWatchModeActiveChange={setWatchModeActive}
+              />
+            </aside>
+          ) : screenShare !== null ? (
             <aside className="flex w-[254px] shrink-0 flex-col gap-2">
               <ParticipantColumn
                 participants={participantSnapshot}
@@ -1484,18 +1519,27 @@ function ActionBar({
   screenShareError,
   onToggleScreenShare,
   nickname,
-  localIdentity,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  localIdentity: _localIdentity,
   room,
+  watchModeActive,
+  watchPanelOpen,
+  onToggleWatchPanel,
 }: {
   screenSharing: boolean;
   currentSharerIdentity: string | null;
   screenShareError: string | null;
   onToggleScreenShare: () => void;
   nickname: string;
+  /** Reserved for future per-participant feature gating. */
   localIdentity: string;
   /** Passed through to MoviePickerButton so it can attach camera tracks and
    *  read the local/remote identities for the picker. */
   room: Room | null;
+  /** AC7: Watch Mode is active — disable screen-share. */
+  watchModeActive: boolean;
+  watchPanelOpen: boolean;
+  onToggleWatchPanel: () => void;
 }) {
   const someoneElseSharing = currentSharerIdentity !== null;
   const { pending: requestPending, request: requestShare } = useShareRequest(
@@ -1516,25 +1560,34 @@ function ActionBar({
     }
     requestShare();
   };
-  const shareDisabled = someoneElseSharing && requestPending;
+  // AC7: disable share when Watch Mode is actively playing.
+  const shareDisabled = (someoneElseSharing && requestPending) || watchModeActive;
+  const shareTitle = watchModeActive
+    ? "Watch Mode is active — stop it first to screen-share"
+    : someoneElseSharing && !requestPending
+      ? "Ask the current sharer to yield."
+      : undefined;
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-3">
-        {/* Left cluster — feature buttons (Phase 2 wires the behavior) */}
+        {/* Left cluster — feature buttons */}
         <div className="flex flex-wrap items-center gap-1">
           <LookAtMePill nickname={nickname} />
           <WhisperTogglePill />
           <MoviePickerButton room={room} />
+          {/* Watch Mode entry point (F7 lazy-loaded) */}
+          <WatchModeButton
+            watchActive={watchPanelOpen}
+            screenShareActive={screenSharing || someoneElseSharing}
+            onToggle={onToggleWatchPanel}
+          />
           <button
             type="button"
             onClick={onShareClick}
             disabled={shareDisabled}
             aria-disabled={shareDisabled}
-            title={
-              someoneElseSharing && !requestPending
-                ? "Ask the current sharer to yield."
-                : undefined
-            }
+            title={shareTitle}
             className="flex h-[45px] items-center justify-center gap-2 rounded-lg border border-black/10 bg-white px-6 font-[family-name:var(--font-outfit)] text-sm font-medium text-zinc-900 shadow-sm transition hover:bg-zinc-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-white"
           >
             <ShareScreenIcon className="size-4" />

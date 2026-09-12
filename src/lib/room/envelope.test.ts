@@ -4,6 +4,12 @@ import {
   decodeEvent,
   encodeEvent,
   type RoomEvent,
+  type WatchLoadEvent,
+  type WatchPlayEvent,
+  type WatchPauseEvent,
+  type WatchSeekEvent,
+  type WatchHeartbeatEvent,
+  type WatchStopEvent,
 } from "./envelope";
 
 function bytes(json: unknown): Uint8Array {
@@ -189,5 +195,387 @@ describe("envelope drops (silent-drop posture)", () => {
   it("does not throw when onDrop is omitted", () => {
     expect(() => decodeEvent(bytes({ nope: true }))).not.toThrow();
     expect(decodeEvent(bytes({ nope: true }))).toBeNull();
+  });
+});
+
+// ---- Watch Mode envelope round-trips (W-1.1) --------------------------------
+
+const TS = 1_700_000_000_000;
+const VALID_MEDIA_ID = "dQw4w9WgXcQ";
+const VALID_UPDATED_AT = 1_700_000_001_000;
+
+describe("watch/* envelope round-trips", () => {
+  it("watch/load round-trips", () => {
+    const event: WatchLoadEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "watch/load",
+      providerId: "youtube",
+      mediaId: VALID_MEDIA_ID,
+      positionSec: 0,
+      updatedAt: VALID_UPDATED_AT,
+    };
+    expect(decodeEvent(encodeEvent(event as RoomEvent))).toEqual(event);
+  });
+
+  it("watch/play round-trips", () => {
+    const event: WatchPlayEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "watch/play",
+      positionSec: 42.5,
+      updatedAt: VALID_UPDATED_AT,
+    };
+    expect(decodeEvent(encodeEvent(event as RoomEvent))).toEqual(event);
+  });
+
+  it("watch/pause round-trips", () => {
+    const event: WatchPauseEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "watch/pause",
+      positionSec: 100,
+      updatedAt: VALID_UPDATED_AT,
+    };
+    expect(decodeEvent(encodeEvent(event as RoomEvent))).toEqual(event);
+  });
+
+  it("watch/seek round-trips", () => {
+    const event: WatchSeekEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "watch/seek",
+      positionSec: 3600,
+      updatedAt: VALID_UPDATED_AT,
+    };
+    expect(decodeEvent(encodeEvent(event as RoomEvent))).toEqual(event);
+  });
+
+  it("watch/heartbeat round-trips", () => {
+    const event: WatchHeartbeatEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "watch/heartbeat",
+      positionSec: 0,
+      updatedAt: VALID_UPDATED_AT,
+    };
+    expect(decodeEvent(encodeEvent(event as RoomEvent))).toEqual(event);
+  });
+
+  it("watch/stop round-trips", () => {
+    const event: WatchStopEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "watch/stop",
+      updatedAt: VALID_UPDATED_AT,
+    };
+    expect(decodeEvent(encodeEvent(event as RoomEvent))).toEqual(event);
+  });
+});
+
+describe("watch/* envelope rejection (malformed payloads)", () => {
+  it("rejects watch/load with invalid mediaId (bad chars)", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/load",
+          providerId: "youtube",
+          mediaId: "bad id!!!!!",
+          positionSec: 0,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects watch/load with mediaId shorter than 11 chars", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/load",
+          providerId: "youtube",
+          mediaId: "dQw4w9WgXc", // 10 chars
+          positionSec: 0,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects watch/load with mediaId longer than 11 chars", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/load",
+          providerId: "youtube",
+          mediaId: "dQw4w9WgXcQQ", // 12 chars
+          positionSec: 0,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects watch/load with unknown providerId — security-review open question #4", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/load",
+          providerId: "malicious-provider",
+          mediaId: VALID_MEDIA_ID,
+          positionSec: 0,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects watch/load with updatedAt above year-2100 cap (H2 boundary)", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/load",
+          providerId: "youtube",
+          mediaId: VALID_MEDIA_ID,
+          positionSec: 0,
+          updatedAt: 4_102_444_800_001, // exactly one ms over the cap
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts watch/load with updatedAt exactly at the year-2100 cap", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/load",
+          providerId: "youtube",
+          mediaId: VALID_MEDIA_ID,
+          positionSec: 0,
+          updatedAt: 4_102_444_800_000,
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it("rejects watch/play with negative positionSec (L2 boundary)", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/play",
+          positionSec: -1,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects watch/pause with positionSec > 86400 (L2 boundary)", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/pause",
+          positionSec: 86_401,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("accepts watch/seek with positionSec exactly 86400", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/seek",
+          positionSec: 86_400,
+          updatedAt: VALID_UPDATED_AT,
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it("rejects watch/heartbeat with updatedAt: Number.MAX_SAFE_INTEGER (H2 griefing vector)", () => {
+    expect(
+      decodeEvent(
+        bytes({
+          v: ENVELOPE_VERSION,
+          ts: TS,
+          type: "watch/heartbeat",
+          positionSec: 0,
+          updatedAt: Number.MAX_SAFE_INTEGER,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("does not break existing event decoding (additive union check)", () => {
+    const reaction: RoomEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "reaction",
+      emoji: "🎬",
+      id: "r-1",
+      name: "Sarushna",
+    };
+    expect(decodeEvent(encodeEvent(reaction))).toEqual(reaction);
+  });
+});
+
+describe("hello/snapshot with watchState (ADR 0006 late-joiner handshake)", () => {
+  it("snapshot without watchState field decodes cleanly (backward compat)", () => {
+    const snap: RoomEvent = {
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "hello",
+      phase: "snapshot",
+      from: "uuid-peer",
+      joinedAt: 10,
+      held: null,
+      whisperOn: false,
+      cardsEnabled: false,
+      currentCard: null,
+    };
+    expect(decodeEvent(encodeEvent(snap))).toEqual(snap);
+  });
+
+  it("snapshot with watchState: absent (field omitted) decodes cleanly", () => {
+    const snap = bytes({
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "hello",
+      phase: "snapshot",
+      from: "uuid-peer",
+      joinedAt: 10,
+      held: null,
+      whisperOn: false,
+      cardsEnabled: false,
+      currentCard: null,
+      // watchState intentionally absent
+    });
+    const decoded = decodeEvent(snap);
+    expect(decoded).not.toBeNull();
+    if (decoded?.type === "hello" && decoded.phase === "snapshot") {
+      expect(decoded.watchState).toBeUndefined();
+    }
+  });
+
+  it("snapshot with fully-populated watchState decodes and round-trips", () => {
+    const snap = bytes({
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "hello",
+      phase: "snapshot",
+      from: "uuid-peer",
+      joinedAt: 10,
+      held: null,
+      whisperOn: false,
+      cardsEnabled: false,
+      currentCard: null,
+      watchState: {
+        providerId: "youtube",
+        mediaId: VALID_MEDIA_ID,
+        playbackState: "playing",
+        positionSec: 42,
+        updatedAt: VALID_UPDATED_AT,
+      },
+    });
+    const decoded = decodeEvent(snap);
+    expect(decoded).not.toBeNull();
+    if (decoded?.type === "hello" && decoded.phase === "snapshot") {
+      expect(decoded.watchState).toEqual({
+        providerId: "youtube",
+        mediaId: VALID_MEDIA_ID,
+        playbackState: "playing",
+        positionSec: 42,
+        updatedAt: VALID_UPDATED_AT,
+      });
+    }
+  });
+
+  it("snapshot with watchState.playbackState: paused decodes correctly", () => {
+    const snap = bytes({
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "hello",
+      phase: "snapshot",
+      from: "uuid-peer",
+      joinedAt: 10,
+      held: null,
+      whisperOn: false,
+      cardsEnabled: false,
+      currentCard: null,
+      watchState: {
+        providerId: "youtube",
+        mediaId: VALID_MEDIA_ID,
+        playbackState: "paused",
+        positionSec: 0,
+        updatedAt: VALID_UPDATED_AT,
+      },
+    });
+    expect(decodeEvent(snap)).not.toBeNull();
+  });
+
+  it("snapshot with watchState.updatedAt above year-2100 cap is rejected (H2)", () => {
+    const snap = bytes({
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "hello",
+      phase: "snapshot",
+      from: "uuid-peer",
+      joinedAt: 10,
+      held: null,
+      whisperOn: false,
+      cardsEnabled: false,
+      currentCard: null,
+      watchState: {
+        providerId: "youtube",
+        mediaId: VALID_MEDIA_ID,
+        playbackState: "playing",
+        positionSec: 0,
+        updatedAt: 4_102_444_800_001,
+      },
+    });
+    expect(decodeEvent(snap)).toBeNull();
+  });
+
+  it("snapshot with watchState.providerId = 'malicious-provider' is rejected (Q4)", () => {
+    const snap = bytes({
+      v: ENVELOPE_VERSION,
+      ts: TS,
+      type: "hello",
+      phase: "snapshot",
+      from: "uuid-peer",
+      joinedAt: 10,
+      held: null,
+      whisperOn: false,
+      cardsEnabled: false,
+      currentCard: null,
+      watchState: {
+        providerId: "malicious-provider",
+        mediaId: VALID_MEDIA_ID,
+        playbackState: "playing",
+        positionSec: 0,
+        updatedAt: VALID_UPDATED_AT,
+      },
+    });
+    expect(decodeEvent(snap)).toBeNull();
   });
 });

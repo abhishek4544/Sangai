@@ -16,8 +16,38 @@
  */
 
 import { z } from "zod";
+import { UPDATED_AT_MAX_MS } from "@/lib/watch/validate-url";
 
 export const ENVELOPE_VERSION = 1;
+
+// ---- Watch Mode shared field schemas (ADR 0006 / security-review H2, L2) --
+
+/**
+ * updatedAt is the LWW arbitration key for all watch/* events.
+ *
+ * H2 remediation (schema layer 1): bounded above at year-2100 unix-ms
+ * (4_102_444_800_000). Prevents a peer stamping Number.MAX_SAFE_INTEGER to
+ * permanently win every LWW comparison for the life of the room.
+ * Layer 2 (runtime skew cap) is enforced by isWatchEventFresh() in
+ * src/lib/watch/validate-url.ts — call it after Zod parse in useWatchSync.
+ */
+const WatchUpdatedAt = z.number().int().min(0).max(UPDATED_AT_MAX_MS);
+
+/**
+ * positionSec is the playhead position in seconds.
+ *
+ * L2 remediation: capped at 86 400 s (24 hours). YouTube videos longer than
+ * that do not exist; the cap prevents a malformed seek from passing an
+ * implementation-defined value to player.seekTo().
+ */
+const WatchPositionSec = z.number().nonnegative().max(86_400);
+
+/**
+ * mediaId for the YouTube provider: exactly 11 chars from [A-Za-z0-9_-].
+ * Validated at publish time by validateWatchUrl(); re-validated on receive
+ * so a malicious peer cannot inject an arbitrary string.
+ */
+const WatchMediaId = z.string().regex(/^[A-Za-z0-9_-]{11}$/);
 
 // ---- Payload shapes ------------------------------------------------------
 
@@ -342,6 +372,257 @@ const TruthOrDareSchema = z.discriminatedUnion("phase", [
   }),
 ]);
 
+/** Would You Rather — two-player pick game. Both peers pick A or B on the
+ *  same round simultaneously; the panel auto-reveals when both picks land.
+ *  RELIABLE — a lost pick would strand a peer on "waiting for partner…".
+ *  `roundIdx` on every event lets the receiver drop stale duplicates. */
+const WouldYouRatherSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("wouldYouRather"),
+    phase: z.literal("pick"),
+    roundIdx: z.number().int().nonnegative(),
+    option: z.enum(["a", "b"]),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("wouldYouRather"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("wouldYouRather"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Never Have I Ever — two-player simultaneous confession game. Both peers
+ *  tap "have" or "never" on the same round; the panel auto-reveals when
+ *  both answers land. RELIABLE — a lost answer would strand a peer on
+ *  "waiting…". `roundIdx` on every event lets the receiver drop stale
+ *  duplicates. Same shape as wouldYouRather with `answer` replacing `option`. */
+const NeverHaveIEverSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("neverHaveIEver"),
+    phase: z.literal("answer"),
+    roundIdx: z.number().int().nonnegative(),
+    answer: z.enum(["have", "never"]),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("neverHaveIEver"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("neverHaveIEver"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Most Likely To — both peers simultaneously point at whoever fits.
+ *  `target` is "me" or "partner" from the sender's POV; the receiver flips
+ *  the interpretation to their own POV at render time. Same reliable pick
+ *  pattern as WYR / NHIE; `roundIdx` stale-guard. */
+const MostLikelyToSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("mostLikelyTo"),
+    phase: z.literal("point"),
+    roundIdx: z.number().int().nonnegative(),
+    target: z.enum(["me", "partner"]),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("mostLikelyTo"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("mostLikelyTo"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** How Well Do You Know Me — turn-based multiple-choice. Two events per
+ *  round: the subject broadcasts `subject-pick` (their true answer, index
+ *  0-3), the partner broadcasts `guess` (their guess, index 0-3). Panel
+ *  reveals when both are in. `roundIdx` stale-guard on every event.
+ *  RELIABLE — a lost event strands a peer on "waiting…". */
+const HowWellSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("howWell"),
+    phase: z.literal("subject-pick"),
+    roundIdx: z.number().int().nonnegative(),
+    optionIdx: z.number().int().min(0).max(3),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("howWell"),
+    phase: z.literal("guess"),
+    roundIdx: z.number().int().nonnegative(),
+    optionIdx: z.number().int().min(0).max(3),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("howWell"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("howWell"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Story Time — cooperative co-authoring game. Both peers alternate filling
+ *  4 blanks on a shared story template. Wire carries the chosen option per
+ *  blank; the turn owner is derived deterministically from sorted identities
+ *  so both sides agree without coordination. RELIABLE — a lost fill would
+ *  leave the story frozen. `roundIdx` stale-guard as usual. */
+const StoryTimeSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("storyTime"),
+    phase: z.literal("fill"),
+    roundIdx: z.number().int().nonnegative(),
+    blankIdx: z.number().int().min(0).max(3),
+    optionIdx: z.number().int().min(0).max(3),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("storyTime"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("storyTime"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Two Truths & a Lie — turn-based text-input couples game. Author sends 3
+ *  statements + lieIdx in one atomic `submit` event; guesser sends `guess`
+ *  with which index they think is the lie. RELIABLE.
+ *
+ *  Wire honesty note (same posture as How Well): `lieIdx` travels in
+ *  plaintext, so a client that peeks at raw events could see the answer.
+ *  This is a two-person couples game — trust is the model. If we ever open
+ *  it up to strangers we'd need commit-reveal (author sends hash first).
+ *
+ *  Statement cap: 140 chars each. Long enough for a real anecdote, short
+ *  enough that three of them fit on a phone card. Length caps enforced on
+ *  both the input and the schema so an oversized payload is dropped. */
+const TwoTruthsSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("twoTruths"),
+    phase: z.literal("submit"),
+    roundIdx: z.number().int().nonnegative(),
+    statements: z.tuple([
+      z.string().min(1).max(140),
+      z.string().min(1).max(140),
+      z.string().min(1).max(140),
+    ]),
+    lieIdx: z.number().int().min(0).max(2),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("twoTruths"),
+    phase: z.literal("guess"),
+    roundIdx: z.number().int().nonnegative(),
+    guessIdx: z.number().int().min(0).max(2),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("twoTruths"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("twoTruths"),
+    phase: z.literal("reset"),
+  }),
+]);
+
+/** Slow Down — cooperative shared-timer ritual game. Either partner taps
+ *  Start and broadcasts `start` with the UTC anchor timestamp. Both peers
+ *  count down from that anchor so the timer is naturally in sync. `stop`
+ *  cancels early (either partner). RELIABLE — a lost start would strand
+ *  one peer on the "ready" screen. Duration is content-driven, not on the
+ *  wire: peers derive it from `roundIdx` via the shared deck. */
+const SlowDownSchema = z.discriminatedUnion("phase", [
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("slowDown"),
+    phase: z.literal("start"),
+    roundIdx: z.number().int().nonnegative(),
+    /** UTC millis anchor for the countdown. Bounded above at year-2100 so a
+     *  malicious peer can't stamp Number.MAX_SAFE_INTEGER and freeze the
+     *  timer forever (same posture as WatchUpdatedAt). */
+    startAt: WatchUpdatedAt,
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("slowDown"),
+    phase: z.literal("stop"),
+    roundIdx: z.number().int().nonnegative(),
+    by: z.string().min(1).max(128),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("slowDown"),
+    phase: z.literal("next"),
+    nextIdx: z.number().int().nonnegative(),
+  }),
+  z.object({
+    v: z.literal(ENVELOPE_VERSION),
+    ts: z.number().int().nonnegative(),
+    type: z.literal("slowDown"),
+    phase: z.literal("reset"),
+  }),
+]);
+
 /** Couple Games — which game is currently open in the right-column panel.
  *  Room-wide LWW by `ts`. `open` sets the visible game id; `close` clears
  *  back to the tile grid. RELIABLE — a lost event would strand the panel
@@ -440,8 +721,114 @@ const HelloSchema = z.discriminatedUnion("phase", [
       })
       .nullable()
       .optional(),
+    // Watch Mode v1.1 (ADR 0006) — late-joiner catch-up. nullable = no Watch
+    // Mode active; .optional() = pre-v1.1 peers who omit this field decode
+    // cleanly. Joiner treats absence and null identically (no Watch Mode).
+    // Security: WatchUpdatedAt and WatchPositionSec inherit H2/L2 caps.
+    // providerId is z.literal("youtube") — no arbitrary strings (review §Q4).
+    watchState: z
+      .object({
+        providerId: z.literal("youtube"),
+        mediaId: WatchMediaId,
+        playbackState: z.enum(["playing", "paused"]),
+        positionSec: WatchPositionSec,
+        updatedAt: WatchUpdatedAt,
+      })
+      .optional(),
   }),
 ]);
+
+/**
+ * Watch Mode envelope types — ADR 0006 / W-1.1.
+ *
+ * Security notes baked into every schema:
+ *
+ * - No controllerId field in any payload (M3 remediation). The authoritative
+ *   sender identity is the LiveKit DataReceived participant argument, not a
+ *   self-reported field in the payload. useWatchSync reads participant.identity
+ *   from the transport layer for controller display; a spoofed payload field
+ *   would be discarded.
+ *
+ * - updatedAt uses WatchUpdatedAt (year-2100 cap) — H2 schema remediation.
+ *   Pair with isWatchEventFresh() at call-site for the runtime skew cap.
+ *
+ * - positionSec uses WatchPositionSec (≤ 86 400 s) — L2 remediation.
+ *
+ * - providerId is z.literal("youtube") for v1.1. When adding a second
+ *   provider, expand to z.enum([...]) in the same PR that adds the registry
+ *   entry. Never accept arbitrary strings (security-review open question #4).
+ */
+
+/** watch/load — broadcast when a participant loads a new video. RELIABLE. */
+const WatchLoadSchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("watch/load"),
+  // M3: no controllerId — sender identity comes from LiveKit DataReceived arg.
+  providerId: z.literal("youtube"),
+  mediaId: WatchMediaId,
+  positionSec: WatchPositionSec,
+  updatedAt: WatchUpdatedAt,
+});
+
+/** watch/play — broadcast when any participant resumes playback. RELIABLE. */
+const WatchPlaySchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("watch/play"),
+  // M3: no controllerId — sender identity comes from LiveKit DataReceived arg.
+  positionSec: WatchPositionSec,
+  updatedAt: WatchUpdatedAt,
+});
+
+/** watch/pause — broadcast when any participant pauses playback. RELIABLE. */
+const WatchPauseSchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("watch/pause"),
+  // M3: no controllerId — sender identity comes from LiveKit DataReceived arg.
+  positionSec: WatchPositionSec,
+  updatedAt: WatchUpdatedAt,
+});
+
+/** watch/seek — broadcast when any participant scrubs to a new position. RELIABLE. */
+const WatchSeekSchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("watch/seek"),
+  // M3: no controllerId — sender identity comes from LiveKit DataReceived arg.
+  positionSec: WatchPositionSec,
+  updatedAt: WatchUpdatedAt,
+});
+
+/**
+ * watch/heartbeat — drift-correction broadcast every 3 s while playing. LOSSY.
+ * Receivers compare remote.positionSec + age(remote.updatedAt) to local
+ * getPosition(); if |diff| > 1.5 s, seek to the remote position.
+ */
+const WatchHeartbeatSchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("watch/heartbeat"),
+  // M3: no controllerId — sender identity comes from LiveKit DataReceived arg.
+  positionSec: WatchPositionSec,
+  updatedAt: WatchUpdatedAt,
+});
+
+/**
+ * watch/stop — broadcast when any participant stops Watch Mode for the room.
+ * Receiving peers tear down the player and return to base (voice + video +
+ * optional screen-share). RELIABLE — a lost stop leaves a peer stuck on a
+ * stale player; explicit type preferred over reusing watch/load with empty
+ * mediaId (avoids ambiguity at the receiver).
+ */
+const WatchStopSchema = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  ts: z.number().int().nonnegative(),
+  type: z.literal("watch/stop"),
+  // M3: no controllerId — sender identity comes from LiveKit DataReceived arg.
+  updatedAt: WatchUpdatedAt,
+});
 
 /** Union of every valid inbound event on the data channel. */
 export const RoomEventSchema = z.union([
@@ -460,6 +847,19 @@ export const RoomEventSchema = z.union([
   MoviePickerSchema,
   MovieTriviaSchema,
   EmojiCharadesSchema,
+  WouldYouRatherSchema,
+  NeverHaveIEverSchema,
+  MostLikelyToSchema,
+  HowWellSchema,
+  StoryTimeSchema,
+  TwoTruthsSchema,
+  SlowDownSchema,
+  WatchLoadSchema,
+  WatchPlaySchema,
+  WatchPauseSchema,
+  WatchSeekSchema,
+  WatchHeartbeatSchema,
+  WatchStopSchema,
 ]);
 
 export type RoomEvent = z.infer<typeof RoomEventSchema>;
@@ -478,6 +878,19 @@ export type DrawEvent = z.infer<typeof DrawSchema>;
 export type MoviePickerEvent = z.infer<typeof MoviePickerSchema>;
 export type MovieTriviaEvent = z.infer<typeof MovieTriviaSchema>;
 export type EmojiCharadesEvent = z.infer<typeof EmojiCharadesSchema>;
+export type WouldYouRatherEvent = z.infer<typeof WouldYouRatherSchema>;
+export type NeverHaveIEverEvent = z.infer<typeof NeverHaveIEverSchema>;
+export type MostLikelyToEvent = z.infer<typeof MostLikelyToSchema>;
+export type HowWellEvent = z.infer<typeof HowWellSchema>;
+export type StoryTimeEvent = z.infer<typeof StoryTimeSchema>;
+export type TwoTruthsEvent = z.infer<typeof TwoTruthsSchema>;
+export type SlowDownEvent = z.infer<typeof SlowDownSchema>;
+export type WatchLoadEvent = z.infer<typeof WatchLoadSchema>;
+export type WatchPlayEvent = z.infer<typeof WatchPlaySchema>;
+export type WatchPauseEvent = z.infer<typeof WatchPauseSchema>;
+export type WatchSeekEvent = z.infer<typeof WatchSeekSchema>;
+export type WatchHeartbeatEvent = z.infer<typeof WatchHeartbeatSchema>;
+export type WatchStopEvent = z.infer<typeof WatchStopSchema>;
 
 // ---- Encode / decode ------------------------------------------------------
 

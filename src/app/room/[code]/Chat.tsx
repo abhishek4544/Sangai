@@ -137,7 +137,7 @@ export function ChatPanel({ nickname, localIdentity }: ChatPanelProps) {
             type="submit"
             disabled={!canSend}
             aria-disabled={!canSend}
-            className="rounded-lg border border-sky-300 bg-sky-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:bg-zinc-200 disabled:text-zinc-500"
+            className="rounded-lg border border-sky-700 bg-sky-700 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-not-allowed disabled:border-zinc-200 disabled:bg-zinc-200 disabled:text-zinc-500"
           >
             Send
           </button>
